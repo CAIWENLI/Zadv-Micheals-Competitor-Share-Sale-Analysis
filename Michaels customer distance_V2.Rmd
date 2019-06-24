@@ -1,0 +1,248 @@
+---
+title: "Michaels customer distance"
+author: "Marianne Rochet"
+date: "2/4/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r connection SQL}
+rm(list=ls())
+library(RJDBC)
+library(rJava)
+library(dplyr)
+# Connect to the server 
+drv <- JDBC(driverClass  = "com.microsoft.sqlserver.jdbc.SQLServerDriver", classPath = "/home/caiwenli/R/Projects/R-DCM/Drivers/sqljdbc_7.0/enu/mssql-jdbc-7.0.0.jre8.jar")
+
+conn <- dbConnect(drv,'jdbc:sqlserver://bi.ztrac.com:1433;databaseName=transactionaldata','Caiwen Li','Dsci6600zadv')
+
+# Get table list 
+table.list <- paste("SELECT * FROM INFORMATION_SCHEMA.TABLES", sep="")
+
+tables <- dbGetQuery(conn, table.list)
+
+tables$queryname <- paste0(tables$TABLE_SCHEMA,".",tables$TABLE_NAME)
+
+```
+
+```{r Sales data by zip}
+
+CustCountStore.query <- paste(" SELECT TOP 1000 * FROM Michaels.CustomerCountbyStore", sep="")
+
+CustCountStore.data <- dbGetQuery(conn, CustCountStore.query)
+
+
+# 50 weeks
+nbweeks.query <- paste(" SELECT DISTINCT wk_idnt FROM Michaels.CustomerCountbyStore", sep="")
+
+nbweeks.data <- dbGetQuery(conn, nbweeks.query)
+
+
+#1,538 stores
+nbstores.query <- paste(" SELECT DISTINCT loc_desc FROM Michaels.CustomerCountbyStore", sep="")
+
+nbstores.data <- dbGetQuery(conn, nbstores.query)
+
+TotalSales.query <- paste(" SELECT sum(CONVERT (Float,sales)) as sales FROM Michaels.CustomerCountbyStore", sep="")
+
+TotalSales.data <- dbGetQuery(conn, TotalSales.query)
+
+SalesStoreZip.query <- paste(" SELECT DISTINCT loc_desc, postal_cd, sum(CONVERT (Float,sales)) as sales FROM Michaels.CustomerCountbyStore group by loc_desc, postal_cd", sep="")
+
+#SalesStoreZip.query <- paste(" SELECT top 100 * FROM Michaels.CustomerCountbyStore where IsNumeric(sales) <> 1", sep="")
+
+SalesStoreZip.data <- dbGetQuery(conn, SalesStoreZip.query)
+
+store_list <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Michaels_Store List.csv")
+
+store_list <-  store_list[,c("STORE.NUMBER","LATITUDE","LONGITUDE","COUNTRY")]
+
+SalesStoreZip.data$loc_number <- sapply(strsplit(SalesStoreZip.data$loc_desc, " "), "[", 1)
+
+SalesStoreZip.data$loc_number <- as.numeric(SalesStoreZip.data$loc_number)
+
+SalesStoreZip.data <- merge(SalesStoreZip.data, store_list, by.x="loc_number", by.y="STORE.NUMBER")
+
+SalesStoreZip.data <- SalesStoreZip.data[SalesStoreZip.data$COUNTRY=="US",]
+
+summarise(SalesStoreZip.data, nb_stores=n_distinct(store))
+
+summarise(SalesStoreZip.data, sales=sum(sales))
+
+SalesStoreZip.data$zip <- as.numeric(SalesStoreZip.data$postal_cd)
+
+library(stringr)
+
+SalesStoreZip.data$zip <- ifelse(SalesStoreZip.data$zip==0,NA,SalesStoreZip.data$zip)
+
+SalesStoreZip.data$zip2 <- str_pad(SalesStoreZip.data$zip, width=5, side="left", pad="0")
+
+missingZip <- SalesStoreZip.data[is.na(SalesStoreZip.data$zip2),]
+
+summarise(missingZip, sales=sum(sales))
+```
+
+
+
+```{r Distance calculation}
+
+library(geosphere)
+library(dplyr)
+library(zipcode)
+library(RCurl)
+library(RJSONIO)
+library(plyr)
+
+b <- 200 # miles in radius
+
+data(zipcode.civicspace)
+
+zipcode.civicspace$timezone <- NULL
+zipcode.civicspace$dst <- NULL
+
+
+ziplist <- array()
+
+target <- store_list[store_list$COUNTRY=="US",]
+
+target <- target[,c("STORE.NUMBER","LATITUDE","LONGITUDE")]
+
+target <- target[complete.cases(target),]
+
+names(target) <- c("store","latitude","longitude")
+
+
+for (i in 1: length(target$store)) {
+
+a <- as.character(target[i,1])
+
+ab <- target[ i ,c("longitude","latitude")]
+
+ab2 <- zipcode.civicspace[,c("longitude", "latitude")]
+
+test <- as.data.frame(distm(ab, ab2))
+               
+test1 <- as.data.frame(t(test))
+
+test2 <- cbind(zipcode.civicspace,test1)
+
+colnames(test2) <- c("zip", "city", "state", "lattitude", "longitude", "meter")
+
+test2 <- mutate(test2, kilometer = meter/1000, miles = kilometer * 0.621371)
+
+zip1 <- filter(test2, miles <= b)
+
+zip1 <- mutate(zip1, store = a)
+
+ziplist <- rbind(zip1, ziplist)
+
+ziplist <- filter(ziplist, store !="")
+
+}
+
+
+```
+
+```{r Merge sales data}
+
+SalesStoreZip.data$store <- as.character(SalesStoreZip.data$loc_number)
+
+SalesZipDistance <- merge(SalesStoreZip.data,ziplist, by.x=c("store","zip2"), by.y=c("store","zip"), all.x=TRUE)
+
+SalesStoreZip.data <- SalesStoreZip.data[order(SalesStoreZip.data$store,SalesStoreZip.data$postal_cd),]
+
+ziplist <- ziplist[order(ziplist$store,ziplist$zip),]
+
+SalesZipDistance <- SalesZipDistance[order(SalesZipDistance$store,SalesZipDistance$postal_cd),]
+
+
+```
+
+```{r Store radius}
+
+detach("package:plyr", unload=TRUE)
+library(dplyr)
+
+SalesZipDistance$radius <- ifelse(is.na(SalesZipDistance$miles),"8.N/A", ifelse(SalesZipDistance$miles<5,"1. <5mi", ifelse(SalesZipDistance$miles<10,"2. 5-10mi",ifelse(SalesZipDistance$miles<15,"3. 10-15mi",ifelse(SalesZipDistance$miles<20,"4. 15-20mi",ifelse(SalesZipDistance$miles<30,"5. 20-30mi",ifelse(SalesZipDistance$miles<50,"6. 30-50mi","7. 50+mi")))))))
+
+
+
+StoreRadius <- summarise(group_by(SalesZipDistance,store,radius), sales=sum(sales))
+
+library(reshape2)
+
+StoreRadius_t <- dcast(StoreRadius, store ~ radius)
+
+TotalRadius <- summarise(group_by(SalesZipDistance,radius), sales=sum(sales))
+
+TotalRadius <- mutate(TotalRadius, sales_pct=sales/sum(sales))
+
+
+```
+
+```{r Rolling sum Radius 75% of sales}
+
+RollData <- SalesZipDistance[!is.na(SalesZipDistance$miles),c("store","sales","miles")]
+
+RollData <- RollData[order(RollData$store,RollData$miles),]
+
+RollData$sales_csum <- ave(RollData$sales, RollData$store, FUN=cumsum)
+
+RollData$totalsales <- ave(RollData$sales, RollData$store, FUN=sum)
+
+RollData$sales_cpct <- RollData$sales_csum/RollData$totalsales
+
+RollData$totalmiles <- ave(RollData$miles, RollData$store, FUN=sum)
+
+RollData$meanmiles <- aggregate(. ~ store, RollData[7], mean)
+
+RollData_v1 <- RollData %>%
+  group_by(store) %>%
+  summarise_at(vars(-store), funs(mean(., na.rm=TRUE)))
+
+Store_all <- RollData[!duplicated(RollData$store),c(1,5)]
+
+Store_75pct <- RollData[RollData$sales_cpct>0.75,]
+Store_75pct <- Store_75pct[!duplicated(Store_75pct$store),]
+
+total_store <- Store_all %>% 
+  full_join(Store_75pct, by = c("store" = "store"))
+
+colnames(total_store) <- c("m_store_num", "100% sale", "100% sale distance", "m_store_dma", "m_store_address", "m_store_zip", "m_store_latitude", "m_store_longitude", "m_store_visit")
+
+Store_75pct$radius <- ifelse(is.na(Store_75pct$miles),"8.N/A", ifelse(Store_75pct$miles<5,"1. <5mi", ifelse(Store_75pct$miles<10,"2. 5-10mi",ifelse(Store_75pct$miles<15,"3. 10-15mi",ifelse(Store_75pct$miles<20,"4. 15-20mi",ifelse(Store_75pct$miles<30,"5. 20-30mi",ifelse(Store_75pct$miles<50,"6. 30-50mi","7. 50+mi")))))))
+
+StoreQuartile <- summarise(Store_75pct, P25=quantile(miles,probs=.25, na.rm=TRUE),  P75=quantile(miles,probs=.66, na.rm=TRUE))
+
+quantile(Store_75pct$miles, c(.1,.25, .50,  .75, .90))
+
+mean(Store_75pct$miles)
+
+median(Store_75pct$miles)
+
+StoreTier <- summarise(Store_75pct, P33=quantile(miles,probs=.33, na.rm=TRUE),  P66=quantile(miles,probs=.66, na.rm=TRUE))
+```
+
+```{r}
+write.csv(StoreRadius_t,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/Michaels_Store Radius.csv")
+
+write.csv(Store_75pct,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/Michaels_Store 75pct.csv")
+
+```
+
+```{r}
+cus_sale$postal_cd <- as.character(cus_sale$postal_cd)
+ziplist$zip <- as.character(ziplist$zip)
+
+library(dplyr)
+ziplist <- ziplist[,c(9,1:8)]
+cus_sale <- SalesStoreZip.data[,c(3,4,8)]
+cus_zip <- unique(SalesStoreZip.data$postal_cd)
+cus_zip <- as.numeric(cus_zip)
+
+
+```
+

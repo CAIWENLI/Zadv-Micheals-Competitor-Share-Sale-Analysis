@@ -1,0 +1,531 @@
+---
+title: "Michaels Sales Analysis"
+author: "Lisa Li"
+date: "12/18/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+```{r load michaels & competitors location data}
+# 1264 Michael Stores
+m_store_list <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Michaels_Store List.csv")
+
+comp_store_list <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Michaels_CompSet.csv")
+
+library(dplyr)
+
+tbl_vars(comp_store_list)
+tbl_vars(m_store_list)
+
+# 903 Jo Ann
+comp_store_list_Joann <- comp_store_list %>% 
+  filter(Company.Name == "1JoAnn" &  Verified.Record  %in% "Yes")
+# 848 Hobby Lobby
+comp_store_list_Hobby <- comp_store_list %>% 
+  filter(Company.Name == "Hobby Lobby" &  Verified.Record  %in% "Yes")
+# 134 AC Moore
+comp_store_list_AC <- comp_store_list %>% 
+  filter(Company.Name == "AC Moore" &  Verified.Record  %in% "Yes")
+
+# 1885 total
+comp_store <- rbind(comp_store_list_AC, comp_store_list_Hobby, comp_store_list_Joann)
+
+```
+
+```{r load traffic data}
+# library(boxr)
+
+# Need go to https://app.box.com/developers/console/app/704858/configuration to set up client id and secret
+
+# client_id <-"yx52dl7k9mgt5ol1n4fr9xtornxtqfqb"
+# client_secret <- "B32xVhhpRJvqyCetMCTYvf8sgOgMZxSK"
+
+# box_auth(client_id = client_id,  client_secret = client_secret, cache = "~/R/Projects/R-DCM/.boxr-oauth", write.Renv = TRUE)
+
+#Zip list and store list
+# m_traffic <- box_read_csv(389086677219)
+# m_sales <- box_read_csv(370123045183)
+
+# Back up data source
+
+library(dplyr)
+m_traffic <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Michaels Conquesting by Zip Code.csv")
+m_sales <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/L52wk_sales.csv")
+m_sales_tl <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/total_sales.csv")
+
+comp_sale <- m_sales %>% 
+  select(store)
+# 1264 stores in store list 
+# 1123 stores have sales
+
+# total_sales <- m_sales %>% 
+#   summarise(l52w_sale = sum(total_rl52wk))
+
+month_store_check <- m_traffic %>% 
+  group_by(MONTH) %>% 
+  summarise(nstore = n(), 
+            traffic = sum(VISITS))
+
+total_traffic <- m_traffic %>% 
+  group_by(LOCATION_BRAND) %>% 
+  summarise(nstore = n()/12, 
+            traffic = sum(VISITS))
+
+comp_tl <- m_sales_tl %>% 
+  summarise(ty = sum(comp_sales),
+            ly = sum(comp_sales_ly),
+            yoy = round((ty-ly)/ty,2))
+
+``` 
+
+```{r michaels stores zips and traffic}
+tbl_vars(m_traffic)
+tbl_vars(m_store_list)
+
+# Zip code is the key for merging traffic data and the store information
+m_traffic$LOCATION_ZIPCODE_5 <- as.character(m_traffic$LOCATION_ZIPCODE_5)
+m_store_list$ZIP.CODE <- as.character(m_store_list$ZIP.CODE)
+m_store_list$ZIP.CODE <- gsub("\\-.*","",m_store_list$ZIP.CODE)
+
+m_traffic_filter <- m_traffic %>% 
+  filter(LOCATION_BRAND %in% "Michaels") %>% 
+  inner_join(m_store_list, by = c("LOCATION_ZIPCODE_5" = "ZIP.CODE")) %>% 
+  group_by(STORE.NUMBER, MARKET, STATE, DMA, ADDRESS., LOCATION_ZIPCODE_5, LATITUDE, LONGITUDE) %>% 
+  summarise(m_visit = sum(VISITS)) 
+
+# Because there are 134 Canada stores,  15 no print stores, 242 stores missing 
+missing_store_zip <- m_traffic %>% 
+  filter(LOCATION_BRAND %in% "Michaels") %>% 
+  full_join(m_store_list, by = c("LOCATION_ZIPCODE_5" = "ZIP.CODE")) %>% 
+  group_by(STORE.NUMBER, `X7.15.Print`) %>% 
+  summarise(traffic = sum(VISITS)) %>% 
+  filter(is.na(traffic)) %>% 
+  group_by(`X7.15.Print`) %>% 
+  summarise(nstore = n())
+
+colnames(m_traffic_filter) <- c("m_store_num", "m_store_market", "m_store_state", "m_store_dma", "m_store_address", "m_store_zip", "m_store_latitude", "m_store_longitude", "m_store_visit")
+
+```
+
+```{r competitors stores zips and traffic}
+comp_store_list_AC$Location.ZIP.Code <- as.character(comp_store_list_AC$Location.ZIP.Code)
+comp_store_list_Joann$Location.ZIP.Code <- as.character(comp_store_list_Joann$Location.ZIP.Code)
+comp_store_list_Hobby$Location.ZIP.Code <- as.character(comp_store_list_Hobby$Location.ZIP.Code)
+
+comp_store_AC <- m_traffic %>% 
+  filter(LOCATION_BRAND %in% "ACMoore") %>% 
+  inner_join(comp_store_list_AC, by = c("LOCATION_ZIPCODE_5" = "Location.ZIP.Code")) %>% 
+  group_by(Location.Address,  Location.City, Location.State, LOCATION_ZIPCODE_5, Latitude, Longitude, Company.Name) %>% 
+  summarise(employee.size = sum(Location.Employee.Size.Actual),
+            sale.amount = sum(Location.Sales.Volume.Actual),
+            traffic.total = sum(VISITS))
+
+comp_store_Joann <- m_traffic %>% 
+  filter(LOCATION_BRAND %in% "JoAnnFabrics") %>% 
+  inner_join(comp_store_list_Joann, by = c("LOCATION_ZIPCODE_5" = "Location.ZIP.Code")) %>% 
+  group_by(Location.Address,  Location.City, Location.State, LOCATION_ZIPCODE_5, Latitude, Longitude, Company.Name) %>% 
+  summarise(employee.size = sum(Location.Employee.Size.Actual),
+            sale.amount = sum(Location.Sales.Volume.Actual),
+            traffic.total = sum(VISITS))
+
+comp_store_Hobby <- m_traffic %>% 
+  filter(LOCATION_BRAND %in% "HobbyLobby") %>% 
+  inner_join(comp_store_list_Hobby, by = c("LOCATION_ZIPCODE_5" = "Location.ZIP.Code")) %>% 
+  group_by(Location.Address, Location.City, Location.State, LOCATION_ZIPCODE_5, Latitude, Longitude, Company.Name) %>% 
+  summarise(employee.size = sum(Location.Employee.Size.Actual),
+            sale.amount = sum(Location.Sales.Volume.Actual),
+            traffic.total = sum(VISITS))
+
+comp_store_total <- rbind(comp_store_AC, comp_store_Hobby, comp_store_Joann)
+
+colnames(comp_store_total) <- c("c_store_address", "c_store_city","c_store_state","c_store_zip", "c_store_latitude", "c_store_longitude", "c_store_company", "c_store_employee_size", "c_store_sales", "c_store_traffic")
+
+
+comp_store_traffic_total <- comp_store_total %>% 
+  group_by(c_store_company) %>% 
+  summarise(visit = sum(c_store_traffic))
+```
+
+```{r calculate distance}
+library(geosphere)
+library(RCurl)
+library(RJSONIO)
+
+b <- 10 # miles in radius
+
+storelist <- data.frame()
+
+target <- m_traffic_filter[,c("m_store_num","m_store_longitude","m_store_latitude")]
+
+target <- target[complete.cases(target),]
+  
+  
+for (i in 1: length(target$m_store_num))
+{
+  a <- as.character(target[i,1])
+  
+  ab <- target[ i , c("m_store_longitude","m_store_latitude")]
+  
+  ab2 <- comp_store_total[, c("c_store_longitude","c_store_latitude")]
+  
+  test <- as.data.frame(distm(ab, ab2))
+  
+  test1 <- as.data.frame(t(test))
+  
+  test2 <- cbind(data.frame(comp_store_total,test1))
+  
+  colnames(test2) <- c("c_store_address", "c_store_city","c_store_state", "c_store_zip", "c_store_latitude", "c_store_longitude", "c_store_company", "c_store_employee_size", "c_store_sales", "c_store_traffic", "meter")
+  
+  test2 <- mutate(test2, kilometer = meter/1000, miles = kilometer * 0.621371)
+  
+  store1 <- filter(test2, miles <= b)
+
+  if (nrow(store1)>0) {
+  
+    store1 <- mutate(store1, m_store_num = a)
+    
+    storelist <- rbind(store1, storelist)
+    
+    storelist <- filter(storelist, m_store_num !="")
+    
+  }
+
+}
+
+m_traffic_filter$m_store_num <- as.character(m_traffic_filter$m_store_num)
+
+full_storelist <- storelist %>% 
+  inner_join(m_traffic_filter, by = c("m_store_num" = "m_store_num")) 
+
+tbl_vars(full_storelist)
+
+write.csv(full_storelist,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/final_storelist_traffic.csv")
+  
+test <- full_storelist %>% 
+  group_by(c_store_company) %>% 
+  summarise(c_store_traffic = sum(c_store_traffic))
+
+test1 <- full_storelist %>% 
+  group_by(c_store_address, c_store_company, m_store_num) %>% 
+  summarise(c_store_traffic = sum(c_store_traffic))
+```
+
+```{r store comp traffic share}
+full_storelist$c_store_traffic <- as.numeric(full_storelist$c_store_traffic)
+
+library(reshape2)
+store_comp_dis <- full_storelist %>% 
+  group_by(m_store_num, m_store_market, m_store_visit, c_store_company) %>% 
+  summarise(c_store_traffic = sum(c_store_traffic)) %>% 
+  dcast(m_store_num + m_store_market + m_store_visit ~ c_store_company)
+
+store_comp_dis[is.na(store_comp_dis)] <- 0
+
+colnames(store_comp_dis) <- c("m_store_num", "m_store_market", "m_visit", "jo_ann_visit", "ac_moore_visit", "hobby_lobby_visit")
+
+store_comp_dis$m_store_num <- as.character(store_comp_dis$m_store_num)
+m_store_list$STORE.NUMBER <- as.character(m_store_list$STORE.NUMBER)
+
+store_comp_dis_v1 <- store_comp_dis %>% 
+  group_by(m_store_num, m_store_market) %>% 
+  summarise(m_visit = sum(m_visit),
+            jo_ann_visit = sum(jo_ann_visit),
+            ac_moore_visit = sum(ac_moore_visit),
+            hobby_lobby_visit = sum(hobby_lobby_visit)) %>% 
+  mutate(total_visit = m_visit + jo_ann_visit + ac_moore_visit + hobby_lobby_visit,
+         michaels_share_per = round(m_visit/total_visit,2),
+         joann_share_per = round(jo_ann_visit/total_visit,2),
+         ac_moore_share_per = round(ac_moore_visit/total_visit,2),
+         hobby_lobby_share_per = round(hobby_lobby_visit/total_visit,2)) %>% 
+  inner_join(m_store_list, by = c("m_store_num"= "STORE.NUMBER"))
+
+tbl_vars(store_comp_dis_v1)
+
+store_comp_dis_v2 <- store_comp_dis_v1 %>% 
+  select(m_store_num, ZIP.CODE, DMA, m_store_market, STATE, CITY, m_visit, jo_ann_visit, ac_moore_visit, hobby_lobby_visit, total_visit, michaels_share_per, joann_share_per, ac_moore_share_per, hobby_lobby_share_per)
+
+colnames(store_comp_dis_v2) <- c("m_store_num", "m_store_zip", "m_store_dma", "m_store_market", "m_store_state", "m_store_city", "m_visit", "jo_ann_visit", "ac_moore_visit", "hobby_lobby_visit", "total_visit", "m_share_per", "joann_share_per", "ac_moore_share_per", "hobby_lobby_share_per")
+
+store_comp_dis_v2$m_store_num <- as.character(store_comp_dis_v2$m_store_num)
+m_sales_tl$store_num <- as.character(m_sales_tl$store_num)
+
+store_comp_dis_v3 <- m_sales_tl %>% 
+  select(store_num, total_sales) %>% 
+  right_join(store_comp_dis_v2, by = c("store_num" = "m_store_num"))
+
+store_comp_dis_v3 <- store_comp_dis_v3[,c(1, 3:7, 2, 8:16)] %>% 
+  mutate(avg_sale_per_visit = round(total_sales/m_visit, 2))
+
+rm(store_comp_dis_v1)
+
+store_comp_dis_v3 <- store_comp_dis_v3[order(-store_comp_dis_v3$total_sales),]
+store_comp_dis_v4 <- store_comp_dis_v3 %>% 
+  mutate(nrow = seq.int(nrow(store_comp_dis_v3)),
+         m_sale_rank = ifelse(nrow <= 198, "First", 
+                              ifelse(nrow > 198 & nrow <= 395, "Second",
+                                     ifelse(nrow > 395 & nrow <= 592, "Third", "Fourth"))),
+         m_index = ifelse(m_visit == 0, 0, 1),
+         jo_ann_index = ifelse(jo_ann_visit == 0, 0, 1),
+         ac_moore_index = ifelse(ac_moore_visit == 0, 0, 1),
+         hobby_lobby_index = ifelse(hobby_lobby_visit == 0, 0, 1),
+         total_index = (m_index + jo_ann_index + ac_moore_index + hobby_lobby_index))
+
+m_store_lag_long <- m_store_list[,c(1,15,16)]
+
+store_comp_dis_v5 <- store_comp_dis_v4  %>% 
+  inner_join(m_store_lag_long, by = c("store_num" = "STORE.NUMBER") )
+write.csv(store_comp_dis_v5,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/store_comp_dis_traffic_final.csv")
+
+```
+
+```{r Analysis numbers}
+m_traffic_trend <- m_traffic %>% 
+  filter(LOCATION_BRAND %in% "Michaels") %>% 
+  inner_join(m_store_list, by = c("LOCATION_ZIPCODE_5" = "ZIP.CODE")) %>% 
+  inner_join(store_comp_dis_v5, by = c("STORE.NUMBER" = "store_num")) %>% 
+  group_by(MONTH) %>% 
+  summarise(visits = sum(VISITS))
+colnames(m_traffic_trend) <- c("month", "m_visit")
+
+hl_traffic_trend <- m_traffic %>%
+  filter(LOCATION_BRAND %in% "HobbyLobby") %>% 
+  inner_join(comp_store_list_Hobby, by = c("LOCATION_ZIPCODE_5" = "Location.ZIP.Code")) %>% 
+  inner_join(full_storelist, by = c("LOCATION_ZIPCODE_5" = "c_store_zip")) %>% 
+  group_by(MONTH) %>% 
+  summarise(visits = sum(VISITS))
+colnames(hl_traffic_trend) <- c("month", "hl_visit")
+
+jo_traffic_trend <- m_traffic %>%
+  filter(LOCATION_BRAND %in% "JoAnnFabrics") %>% 
+  inner_join(comp_store_list_Joann, by = c("LOCATION_ZIPCODE_5" = "Location.ZIP.Code")) %>% 
+  inner_join(full_storelist, by = c("LOCATION_ZIPCODE_5" = "c_store_zip")) %>% 
+  group_by(MONTH) %>% 
+  summarise(visits = sum(VISITS))
+colnames(jo_traffic_trend) <- c("month", "jo_visit")
+
+ac_traffic_trend <- m_traffic %>%
+  filter(LOCATION_BRAND %in% "ACMoore") %>% 
+  inner_join(comp_store_list_AC, by = c("LOCATION_ZIPCODE_5" = "Location.ZIP.Code")) %>% 
+  inner_join(full_storelist, by = c("LOCATION_ZIPCODE_5" = "c_store_zip")) %>% 
+  group_by(MONTH) %>% 
+  summarise(visits = sum(VISITS))
+colnames(ac_traffic_trend) <- c("month", "ac_visit")
+
+traffic_trend <- cbind(m_traffic_trend, hl_traffic_trend, jo_traffic_trend, ac_traffic_trend)
+
+traffic_trend_v1 <- traffic_trend[,c(1,2,4,6,8)] %>% 
+  mutate(t_visit = m_visit + jo_visit + hl_visit + ac_visit) %>% 
+  group_by(month) %>% 
+  summarise(m_per = sum(m_visit/t_visit),
+            jo_per = sum(jo_visit/t_visit),
+            hl_per = sum(hl_visit/t_visit),
+            ac_per = sum(ac_visit/t_visit))
+
+f_traffic_trend <- cbind(traffic_trend, traffic_trend_v1)
+
+m_sales$store_num <- as.character(m_sales$store_num)
+m_sales_trend <- store_comp_dis_v4 %>% 
+  select(store_num) %>% 
+  left_join(m_sales, by = c("store_num" = "store_num"))
+
+m_sales_trend <- melt(m_sales_trend) 
+m_sales_trend[is.na(m_sales_trend)] <- 0
+m_sales_trend$value <- as.numeric(m_sales_trend$value)
+
+m_sales_trend <- m_sales_trend %>% 
+  group_by(variable) %>% 
+  summarise(sales = sum(value))
+
+```
+
+```{r store demographic data}
+library(censusapi)
+library(zipcode)
+
+data("zipcode")
+
+mycensuskey <- "df9e0036b1d36e28e6a40766e6f00e2ae4c6cee9"
+myvintage <- 2017
+
+# B19013_001E Median household income
+# B01002_001E Median age
+# B01003_001E Total Population
+# B01001_002E Male (Sex by Age)
+# B01001_026E Female (Sex by Age)
+# B01001A_001E SEX BY AGE (WHITE ALONE)
+# B01001B_001E SEX BY AGE (BLACK OR AFRICAN AMERICAN ALONE)
+# B01001C_001E SEX BY AGE (AMERICAN INDIAN AND ALASKA NATIVE ALONE)
+# B01001D_001E SEX BY AGE (ASIAN ALONE)
+# B01001E_001E SEX BY AGE (NATIVE HAWAIIAN AND OTHER PACIFIC ISLANDER ALONE)
+# B01001F_001E SEX BY AGE (SOME OTHER RACE ALONE)
+# B01001I_001E SEX BY AGE (HISPANIC OR LATINO)
+
+data <- getCensus(name = "acs/acs5", 
+                  vintage=myvintage, 
+                  key=mycensuskey, 
+                  vars = c("NAME","B19013_001E","B01002_001E", 
+                           "B01003_001E","B01001_002E","B01001_026E",
+                           "B01001A_001E","B01001B_001E","B01001C_001E","B01001D_001E","B01001E_001E","B01001F_001E","B01001I_001E"), 
+                  region = "zip code tabulation area:*")
+
+colnames(data) <- c("zip", "zip_full", "median_income", "median_age", 
+                    "total_population", "male_population", "female_population", 
+                    "white_alone", "black_alone", "american_indian_alaska_native_alone", "asian_alone", "pacific_islander_alone", "other_race", "hispanic_latino")
+
+m_store_demo <- data %>% 
+  inner_join(store_comp_dis_v4, by = c("zip" = "m_store_zip"))
+
+m_store_demo <- m_store_demo[,c(1, 3:37)]
+
+colnames(m_store_demo) <- c("m_store_zip", "median_Income", "median_Age", 
+                    "total_population", "male_population", "female_population",  "white_alone", "black_alone", "american_indian_alaska_native_alone", "asian_alone", "pacific_islander_alone", "other_race", "hispanic_latino", "m_store_Num", "m_store_dma", "m_store_market", "m_store_state", "m_store_city", "total_rl52wk", "m_visit", "jo_ann_visit" ,"ac_moore_visit", "hobby_lobby_visit", "total_visit", "m_share_per", "joann_share_per", "ac_moore_share_per" , "hobby_lobby_share_per", "avg_sale_per_visit", "nrow", "m_sale_rank", "m_index", "jo_ann_index", "ac_moore_index", "hobby_lobby_index","total_index")
+
+m_sales_tl$store_num <- as.character(m_sales_tl$store_num)
+m_store_demo$m_store_Num <- as.character(m_store_demo$m_store_Num)
+m_store_demo_v1 <- m_store_demo %>% 
+  inner_join(m_sales_tl, by = c("m_store_Num" = "store_num")) %>% 
+  mutate(comp_sale = round((comp_sales - comp_sales_ly)/comp_sales_ly,2),
+         m_index = ifelse(m_visit == 0, 0, 1),
+         jo_ann_index = ifelse(jo_ann_visit == 0, 0, 1),
+         ac_moore_index = ifelse(ac_moore_visit == 0, 0, 1),
+         hobby_lobby_index = ifelse(hobby_lobby_visit == 0, 0, 1),
+         total_index = (m_index + jo_ann_index + ac_moore_index + hobby_lobby_index),
+         index = ifelse(total_index == 2, 0.5,
+                        ifelse(total_index == 3, 0.33,
+                               ifelse(total_index == 4, 0.25, 1))),
+         diff_index = m_share_per - index,
+         low_high_share = ifelse(diff_index > 0, "high", ifelse(diff_index < 0, "low", "even")),
+         bucket = ifelse(diff_index > 0 & comp_sale > 0.01, "high share & high comp", 
+                         ifelse(diff_index <= 0 & comp_sale > 0.01, "low share & high comp",
+                                ifelse(diff_index > 0 & comp_sale <= 0.01, "high share & low comp",
+                                       "low share & low comp"))))
+
+write.csv(m_store_demo_v1,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/m_store_demo_final_v1.csv")
+```
+
+```{r uncontested data}
+m_store_num_comp <- full_storelist %>% 
+  select(m_store_num)
+
+m_store_num_comp <- as.numeric(unlist(m_store_num_comp))
+
+# 472 Uncoteseded Store
+m_uncontested_store <- m_store_list %>% 
+  filter(!STORE.NUMBER %in% m_store_num_comp) %>% 
+  select(STORE.NUMBER, ZIP.CODE, DMA, STATE) 
+
+# Merged the traffic data by zip 82 left
+m_uncontested_traffic <- m_traffic %>% 
+  filter(LOCATION_BRAND %in% "Michaels") %>% 
+  inner_join(m_uncontested_store, by = c("LOCATION_ZIPCODE_5" = "ZIP.CODE")) %>% 
+  group_by(STORE.NUMBER, LOCATION_ZIPCODE_5, DMA, STATE) %>% 
+  summarise(m_visit = sum(VISITS)) %>% 
+  left_join(m_sales_tl, by = c("STORE.NUMBER" = "store_num"))
+
+colnames(m_uncontested_traffic) <- c("store_num", "store_zip", "store_dma", "store_state", "store_visit", "store_dma_id", "total_sale", "comp_sale", "comp_sale_ly")
+
+# Merged by the zip for demo 79 left
+m_uncontested_traffic_demo <- m_uncontested_traffic %>% 
+  inner_join(data, by = c("store_zip" = "Zip"))
+
+write.csv(m_uncontested_traffic,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/m_uncontested_traffic.csv")
+write.csv(m_uncontested_traffic_demo,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/m_uncontested_traffic_demo.csv")
+
+```
+
+```{r correlation analysis}
+m_store_demo_v1[is.na(m_store_demo_v1)] <- 0
+m_store_demo_v1[] <- lapply(m_store_demo_v1, factor, exclude = NULL)
+sapply(m_store_demo_v1,class)
+
+columns <-c(2:13, 20:23,38,41)
+m_store_demo_v1[, columns] <- lapply(columns, function(x) as.numeric(m_store_demo_v1[[x]]))
+sapply(m_store_demo_v1,class)
+
+corr_all_variables <- cor(m_store_demo_v1[,c(2:13, 20:23,38)])
+
+
+m_store_demo_v1<-as.data.frame(m_store_demo_v1)
+normalization<-function(x){return((x-min(x))/(max(x)-min(x)))}
+test <- normalization(m_store_demo_v1[,columns])
+
+library(corrplot)
+plot_corr <- cor(test[,c(1:13)])
+corrplot(plot_corr, type="upper", order="hclust")
+
+library(corrplot)
+plot_corr <- cor(test[,c(13:18)])
+corrplot(plot_corr, type="upper", order="hclust")
+
+
+```
+
+```{r Controling test stores}
+m_store_list <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Control testing data.csv")
+m_store_list_all <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Michaels_Store List.csv")
+library(geosphere)
+library(RCurl)
+library(RJSONIO)
+
+b <- 20 # miles in radius
+
+storelist <- data.frame()
+
+target <- m_store_list[,c("m_store_Num","Longitude","Latitude")]
+
+m_store_all_filter <- m_store_list_all %>% 
+  select(STORE.NUMBER, ZIP.CODE, DMA, LONGITUDE, LATITUDE) 
+colnames(m_store_all_filter) <- c("m_store_num_all","m_store_zip_all","m_store_dma_all", "m_store_longitude_all","m_store_latitude_all")
+colnames(target) <- c("m_store_num","m_store_longitude","m_store_latitude")
+
+target <- target[complete.cases(target),]
+  
+for (i in 1: length(target$m_store_num))
+{
+  a <- as.character(target[i,1])
+  
+  ab <- target[ i , c("m_store_longitude","m_store_latitude")]
+  
+  ab2 <- m_store_all_filter[, c("m_store_longitude_all","m_store_latitude_all")]
+  
+  test <- as.data.frame(distm(ab, ab2))
+  
+  test1 <- as.data.frame(t(test))
+  
+  test2 <- cbind(data.frame(m_store_all_filter,test1))
+  
+  colnames(test2) <- c("m_store_num_all","m_store_zip_all","m_store_dma_all", "m_store_longitude_all","m_store_latitude_all", "meter")
+  
+  test2 <- mutate(test2, kilometer = meter/1000, miles = kilometer * 0.621371)
+  
+  store1 <- filter(test2, miles <= b)
+
+  if (nrow(store1)>0) {
+  
+    store1 <- mutate(store1, m_store_num = a)
+    
+    storelist <- rbind(store1, storelist)
+    
+    storelist <- filter(storelist, m_store_num !="")
+    
+  }
+
+}
+
+m_store_list$m_store_Num <- as.character(m_store_list$m_store_Num)
+
+full_storelist <- storelist %>% 
+  inner_join(m_store_list, by = c("m_store_num" = "m_store_Num")) 
+
+tbl_vars(full_storelist)
+
+write.csv(full_storelist,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/final_storelist_traffic_control testing.csv")
+  
+
+```
+

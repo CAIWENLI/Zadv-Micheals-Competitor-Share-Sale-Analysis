@@ -1,0 +1,208 @@
+---
+title: "Michaels Sales Analysis"
+author: "Lisa Li"
+date: "12/18/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load michaels & competitors location data}
+m_store_list <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Michaels_Store List.csv")
+
+comp_store_list <- read.csv("~/R/Projects/R-DCM/Clients/Michaels/Assets/Inputs/Michaels_CompSet.csv")
+
+library(dplyr)
+
+tbl_vars(comp_store_list)
+tbl_vars(m_store_list)
+
+comp_store_list_Joann <- comp_store_list %>% 
+  filter(Company.Name == "1JoAnn" &  Verified.Record  %in% "Yes")
+
+comp_store_list_Hobby <- comp_store_list %>% 
+  filter(Company.Name == "Hobby Lobby" &  Verified.Record  %in% "Yes")
+
+comp_store_list_AC <- comp_store_list %>% 
+  filter(Company.Name == "AC Moore" &  Verified.Record  %in% "Yes")
+
+
+comp_store <- rbind(comp_store_list_AC, comp_store_list_Hobby, comp_store_list_Joann)
+  
+rm(comp_store_list)
+rm(comp_store_list_Joann)
+rm(comp_store_list_Hobby)
+rm(comp_store_list_AC)
+
+```
+
+```{r load sales data from Box}
+library(boxr)
+
+# Need go to https://app.box.com/developers/console/app/704858/configuration to set up client id and secret
+
+client_id <-"yx52dl7k9mgt5ol1n4fr9xtornxtqfqb"
+client_secret <- "B32xVhhpRJvqyCetMCTYvf8sgOgMZxSK"
+
+box_auth(client_id = client_id,  client_secret = client_secret, cache = "~/R/Projects/R-DCM/.boxr-oauth", write.Renv = TRUE)
+
+#Zip list and store list
+
+m_sales <- box_read_csv(370123045183)
+m_comp_sale <- box_read_csv(379269737291)
+m_missing_store <- box_read_csv(377141260367)
+
+``` 
+
+```{r michaels & competitors stores zips and sales}
+tbl_vars(m_sales)
+tbl_vars(m_store_list)
+m_sales_filter <- m_sales %>% 
+  select(Store_Num, total_rl52wk) %>% 
+  inner_join(m_store_list, by = c("Store_Num" = "STORE.NUMBER")) %>% 
+  left_join(m_comp_sale, by = c("Store_Num" = "ID")) %>% 
+  group_by(Store_Num, MARKET, STATE, DMA, ADDRESS.,ZIP.CODE, LATITUDE, LONGITUDE) %>% 
+  summarise(m_sales = sum(total_rl52wk),
+            m_comp = round(sum(COMP),2)) 
+
+m_sales_filter <- dplyr::bind_rows(m_sales_filter, m_missing_store)
+
+colnames(m_sales_filter) <- c("m_store_num", "m_store_market", "m_store_state", "m_store_dma", "m_store_address", "m_store_zip", "m_store_latitude", "m_store_longitude", "m_store_sale", "m_store_comp")
+
+comp_store_filter <- comp_store %>% 
+  select(Location.Address, Location.ZIP.Code, Latitude, Longitude, Company.Name, Location.Employee.Size.Actual, Location.Sales.Volume.Actual) %>% 
+  mutate(num_store = seq.int(nrow(comp_store)))
+
+colnames(comp_store_filter) <- c("c_store_address", "c_store_zip", "c_store_latitude", "c_store_longitude", "c_store_company", "c_store_employee_size", "c_store_sales", "c_store_num")
+
+```
+
+```{r calculate distance}
+library(geosphere)
+library(RCurl)
+library(RJSONIO)
+
+b <- 20 # miles in radius
+
+storelist <- data.frame()
+
+target <- m_sales_filter[,c("m_store_num","m_store_longitude","m_store_latitude")]
+
+target <- target[complete.cases(target),]
+  
+for (i in 1: length(target$m_store_num))
+{
+  a <- as.character(target[i,1])
+  
+  ab <- target[ i , c("m_store_longitude","m_store_latitude")]
+  
+  ab2 <- comp_store_filter[, c("c_store_longitude","c_store_latitude")]
+  
+  test <- as.data.frame(distm(ab, ab2))
+  
+  test1 <- as.data.frame(t(test))
+  
+  test2 <- cbind(comp_store_filter,test1)
+  
+  colnames(test2) <- c("c_store_address", "c_store_zip", "c_store_latitude", "c_store_longitude", "c_store_company", "c_store_employee_size", "c_store_sales", "c_store_num", "meter")
+  
+  test2 <- mutate(test2, kilometer = meter/1000, miles = kilometer * 0.621371)
+  
+  store1 <- filter(test2, miles <= b)
+
+  if (nrow(store1)>0) {
+  
+    store1 <- mutate(store1, m_store_num = a)
+    
+    storelist <- rbind(store1, storelist)
+    
+    storelist <- filter(storelist, m_store_num !="")
+    
+  }
+
+}
+
+m_sales_filter$m_store_num <- as.character(m_sales_filter$m_store_num)
+
+full_storelist <- storelist %>% 
+  inner_join(m_sales_filter, by = c("m_store_num" = "m_store_num")) 
+
+tbl_vars(full_storelist)
+
+write.csv(full_storelist,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/final_storelist_sale.csv")
+  
+```
+
+```{r store comp sale share}
+full_storelist <- full_storelist %>% 
+  mutate(dis_bucket = ifelse(miles <= 5, "5 mile radius", 
+                         ifelse(miles >5 & miles <= 10, "6 to 10 mile radius",
+                                ifelse(miles > 10 & miles <= 15, "11 to 15 mile radius",
+                                       ifelse(miles > 15 & miles <= 20, "16 to 20 mile radius", "Other"))))) 
+full_storelist$c_store_sales <- as.numeric(full_storelist$c_store_sales)
+
+# Summary
+comp_dis_buc <- full_storelist %>% 
+  group_by(c_store_company, dis_bucket) %>% 
+  summarise(count_store = n_distinct(m_store_num),
+            m_sale = sum(m_store_sale)/count_store,
+            count_competitors = n_distinct(c_store_num),
+            c_sale = sum(c_store_sales)/count_competitors,
+            diff = round((m_sale- c_sale)/c_sale,2))
+
+# Store Comp Sale
+library(reshape2)
+store_comp_dis <- full_storelist %>% 
+  select(m_store_num, m_store_sale, m_store_comp, m_store_market, m_store_state, miles, dis_bucket, c_store_num, c_store_company, c_store_sales) %>% 
+  group_by(m_store_num, m_store_market, m_store_sale, m_store_comp, c_store_company) %>% 
+  summarise(c_store_sale = sum(c_store_sales)) %>% 
+  dcast(m_store_num + m_store_market + m_store_sale + m_store_comp ~ c_store_company)
+
+store_comp_dis[is.na(store_comp_dis)] <- 0
+
+colnames(store_comp_dis) <- c("michaels_store_num", "moichaels_store_market","michaels_sales", "michaels_comp", "jo_ann_sales", "ac_moore_sales", "hobby_lobby_sales")
+
+store_comp_dis_v1 <- store_comp_dis %>% 
+  group_by(michaels_store_num, moichaels_store_market) %>% 
+  summarise(michaels_sales = sum(michaels_sales),
+            michaels_comp = round(sum(michaels_comp),2),
+            jo_ann_sales = sum(jo_ann_sales),
+            ac_moore_sales = sum(ac_moore_sales),
+            hobby_lobby_sales = sum(hobby_lobby_sales)) %>% 
+  mutate(total_sale = michaels_sales + jo_ann_sales + ac_moore_sales + hobby_lobby_sales,
+         michaels_share_per = round(michaels_sales/total_sale,2),
+         joann_share_per = round(jo_ann_sales/total_sale,2),
+         ac_moore_share_per = round(ac_moore_sales/total_sale,2),
+         hobby_lobby_share_per = round(hobby_lobby_sales/total_sale,2)) %>% 
+  inner_join(m_store_list, by = c("michaels_store_num"= "STORE.NUMBER"))
+
+store_comp_dis$michaels_store_num <- as.character(store_comp_dis$michaels_store_num)
+m_store_list$STORE.NUMBER <- as.character(m_store_list$STORE.NUMBER)
+```
+
+```{r store bucket by comp sale share}
+store_buc_dis <- full_storelist %>% 
+  select(m_store_num, m_store_sale, m_store_comp, m_store_market, m_store_state, dis_bucket, c_store_company, c_store_sales) %>% 
+  group_by(m_store_num,  m_store_market,  dis_bucket, m_store_sale, m_store_comp, m_store_market) %>% 
+  summarise(c_store_sale = sum(c_store_sales)) %>% 
+  dcast(m_store_num +  m_store_market + m_store_sale + m_store_comp ~ dis_bucket) 
+
+store_buc_dis[is.na(store_buc_dis)] <- 0
+
+colnames(store_buc_dis) <- c("m_store_num", "m_store_market","m_store_sale", "m_store_comp","11-15mile_comp_share", "16-20mile_comp_share", "5-mile_comp_share", "6-10mile_comp_share")
+
+store_buc_dis_v1 <- store_buc_dis %>% 
+  mutate(comp_sale = `11-15mile_comp_share` + `16-20mile_comp_share` + `5-mile_comp_share` + `6-10mile_comp_share`, 
+         `5-mile_comp_share_per` = round(`5-mile_comp_share`/comp_sale,2),
+         `6-10mile_comp_share_per` = round(`6-10mile_comp_share`/comp_sale,2),
+         `11-15mile_comp_share_per` = round(`11-15mile_comp_share`/comp_sale,2),
+         `16-20mile_comp_share_per` = round(`16-20mile_comp_share`/comp_sale,2))
+
+write.csv(store_buc_dis_v1,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/Competitors Sales by Store & Distance Range.csv")
+write.csv(store_comp_dis_v1,"~/R/Projects/R-DCM/Clients/Michaels/Assets/Outputs/Competitors Sales by Store & Competitors Company Name.csv")
+```
+
+
