@@ -44,8 +44,8 @@ library(boxr)
 
 # Need go to https://app.box.com/developers/console/app/704858/configuration to set up client id and secret
 
-client_id <-"yx52dl7k9mgt5ol1n4fr9xtornxtqfqb"
-client_secret <- "B32xVhhpRJvqyCetMCTYvf8sgOgMZxSK"
+client_id <-"xx"
+client_secret <- "xx"
 
 box_auth(client_id = client_id,  client_secret = client_secret, cache = "~/R/Projects/R-DCM/.boxr-oauth", write.Renv = TRUE)
 
