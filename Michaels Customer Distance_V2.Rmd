@@ -1,6 +1,6 @@
 ---
-title: "Michaels customer distance"
-author: "Marianne Rochet"
+title: "Michaels Customer Distance"
+author: "Lisa Li"
 date: "2/4/2019"
 output: html_document
 ---
